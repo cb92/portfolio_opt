@@ -1,0 +1,27 @@
+
+## Architecture
+```mermaid
+---
+config:
+  layout: elk
+  theme: base
+---
+flowchart LR
+    fe["Asset Optimization (Python)"] ---> test["Front End"]
+    n1["Asset DB (local or Railway)"] --> fe
+    n3["Requested Asset Table"] --> n2["Data Collection (Python/MySQL, run manually)"]
+    n2 --> n1
+    test --> n3
+    test -. user constraints .-> fe
+    n3 -. request status .-> test
+    yf["yfinance"] --> n2
+    ms["Morningstar (mstarpy + headless browser)"] --> n2
+    manual(["Manual Run (local machine)"]) -.-> n2
+
+    fe@{ shape: rounded}
+    n1@{ shape: cyl}
+    n3@{ shape: card}
+    n2@{ shape: rounded}
+    yf@{ shape: rounded}
+    ms@{ shape: rounded}
+```
