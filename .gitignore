@@ -2,6 +2,7 @@
 *.csv
 
 # Distribution / packaging
+__pycache__/
 .Python
 build/
 develop-eggs/
