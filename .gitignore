@@ -49,3 +49,6 @@ tempCodeRunnerFile.py
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Mac Files
+.DS_Store
