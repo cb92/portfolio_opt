@@ -101,3 +101,11 @@ erDiagram
         decimal close_price
     }
 ```
+
+## Database Updates
+Because Morningstar no longer allows automated pulling and we need to acquire Morningstar data via a headless browser, it has to be done manually on my local machine and added to a database for posterity. 
+
+Generally speaking, we want all of the stocks and funds to be roughly the same level of freshness, otherwise the optimization may favor those with more recent history in the case of a recent stock market increase (or disfavor those with recent history in the case of a fall). Given this, the whole set of assets that live in the database should be refreshed somewhere between weekly and monthly, or everything should be refreshed if we're clearing a large request queue.
+
+### Run Log
+A starting set of 35 assets (a mix of stocks, ETFs and mutual funds) has been successfully pulled as of 10/1/26 around 11am.
