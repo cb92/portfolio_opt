@@ -20,6 +20,9 @@ Useful flags:
     --requeue-stale DAYS  re-queue done assets whose data is older than DAYS days (refresh)
  
 Re-running is safe: upserts keep created_at and bump updated_at.
+
+NOTE: this is standalone code that is run on a local machine to populate the database, 
+and is NOT part of the production code.
 """
 import argparse
 import math
@@ -31,56 +34,7 @@ import pandas as pd
 import yfinance as yf
  
 from db import get_connection
-
-
-# ---------------------------------------------------------------------------
-# Set up data structure and common variables
-# ---------------------------------------------------------------------------
-
-SECTORS = [
-    'realestate', 'consumer_cyclical', 'basic_materials', 'consumer_defensive',
-    'technology', 'communication_services', 'financial_services', 'utilities',
-    'industrials', 'energy', 'healthcare',
-]
-
-# yfinance's individual-stock sectorKey uses hyphens; our columns use underscores,
-# and yfinance spells "real-estate" with a hyphen where our bucket is "realestate" (no separator).
-SECTOR_KEY_MAP = {
-    'realestate': 'realestate',
-    'real-estate': 'realestate',
-    'consumer-cyclical': 'consumer_cyclical',
-    'basic-materials': 'basic_materials',
-    'consumer-defensive': 'consumer_defensive',
-    'technology': 'technology',
-    'communication-services': 'communication_services',
-    'financial-services': 'financial_services',
-    'utilities': 'utilities',
-    'industrials': 'industrials',
-    'energy': 'energy',
-    'healthcare': 'healthcare',
-}
-
-TRAILING_RETURN_PERIODS = ['1y', '5y', '10y']
-TRAILING_RETURN_YEARS = {'1y': 1, '5y': 5, '10y': 10}
-
-N_TOP_HOLDINGS = 10
-HISTORY_PERIOD = '12y'
-HISTORY_INTERVAL = '1wk'   # weekly bars; 'Close' = last close of the week
-
-# market-cap size thresholds (USD), used to bucket individual stocks
-LARGE_CAP_THRESHOLD = 10e9
-MID_CAP_THRESHOLD = 2e9
-
-# yfinance quoteType -> how we fetch it
-QUOTE_TYPE_TO_KIND = {'EQUITY': 'STOCK', 'ETF': 'FUND', 'MUTUALFUND': 'FUND'}
-
-# Column limits (must match setup.sql) so out-of-range values become NULL
-# instead of crashing the insert.
-PCT_LIMIT = 10          # DECIMAL(5,4)
-RETURN_LIMIT = 10_000   # DECIMAL(8,4)
-PRICE_LIMIT = 1e8       # DECIMAL(10,2)
-CLOSE_LIMIT = 1e8       # DECIMAL(12,4)
-
+import config
 
 _MSTAR_SESSION = None
 
@@ -116,9 +70,6 @@ def normalize_weightings(weights: dict) -> dict:
         return {}
     return {k: (v / total if v is not None else None) for k, v in weights.items()}
 
-
-
-
 def get_morningstar_session():
     """Lazily create one shared mstarpy session (no network call at import time)."""
     global _MSTAR_SESSION
@@ -132,7 +83,7 @@ def get_morningstar_session():
 def fetch_weekly_history(t: yf.Ticker):
     """Weekly closes for the last HISTORY_PERIOD as a DataFrame[Date, Close], or None."""
     try:
-        hist = t.history(period=HISTORY_PERIOD, interval=HISTORY_INTERVAL).reset_index()
+        hist = t.history(period=config.HISTORY_PERIOD, interval=config.HISTORY_INTERVAL).reset_index()
     except Exception as e:
         print(f'  history fetch failed: {e}')
         return None
@@ -148,13 +99,13 @@ def fetch_weekly_history(t: yf.Ticker):
 
 def compute_trailing_returns(hist) -> dict:
     """Given a price history DataFrame with 'Date' and 'Close' columns,
-    compute trailing total returns for each period in TRAILING_RETURN_PERIODS.
+    compute trailing total returns for each period in config.TRAILING_RETURN_PERIODS.
 
     For each period (e.g. '5y'), finds the trading date closest to
     (latest_date - N years) and computes latest_close / past_close - 1.
     Leaves a period as None if the history doesn't reach back far enough.
     """
-    returns = {p: None for p in TRAILING_RETURN_PERIODS}
+    returns = {p: None for p in config.TRAILING_RETURN_PERIODS}
     if hist is None or hist.empty:
         return returns
 
@@ -162,8 +113,8 @@ def compute_trailing_returns(hist) -> dict:
     latest = hist['Date'].iloc[-1]
     latest_close = hist['Close'].iloc[-1]
 
-    for period in TRAILING_RETURN_PERIODS:
-        years = TRAILING_RETURN_YEARS[period]
+    for period in config.TRAILING_RETURN_PERIODS:
+        years = config.TRAILING_RETURN_YEARS[period]
         target = latest - pd.DateOffset(years=years)
 
         # weekly bars: allow up to one week of slack at the start of the window
@@ -182,7 +133,7 @@ def history_rows(hist) -> list:
         return []
     out = []
     for d, c in zip(hist['Date'], hist['Close']):
-        c = to_num(c, 4, CLOSE_LIMIT)
+        c = to_num(c, 4, config.CLOSE_LIMIT)
         if c is not None:
             out.append((d.date(), c))
     return out
@@ -195,9 +146,9 @@ def classify_market_cap(market_cap) -> str | None:
     """Bucket a market cap (USD) into 'large' / 'mid' / 'small'."""
     if market_cap is None:
         return None
-    if market_cap >= LARGE_CAP_THRESHOLD:
+    if market_cap >= config.LARGE_CAP_THRESHOLD:
         return 'large'
-    elif market_cap >= MID_CAP_THRESHOLD:
+    elif market_cap >= config.MID_CAP_THRESHOLD:
         return 'mid'
     else:
         return 'small'
@@ -238,7 +189,6 @@ def compute_style_pcts(allocation: dict) -> dict:
         'growth': f('largeGrowth') + f('middleGrowth') + f('smallGrowth'),
     }
     return normalize_weightings(raw)
-
 
 def compute_asset_class_pcts(allocation: dict, regional: dict) -> dict:
     """Combine allocationWeighting() (size x style) with regionalSector()'s
@@ -305,13 +255,12 @@ def new_record(symbol: str, security_type: str) -> dict:
         'prices': [],     # list of (date, close)
     }
 
-
 def build_stock(symbol: str, t: yf.Ticker, info: dict) -> dict:
     rec = new_record(symbol, 'STOCK')
     rec['country'] = info.get('country')
     rec['long_business_summary'] = info.get('longBusinessSummary')
  
-    sector = SECTOR_KEY_MAP.get(info.get('sectorKey'))
+    sector = config.SECTOR_KEY_MAP.get(info.get('sectorKey'))
     if sector:
         rec['sectors'][sector] = 1.0
  
@@ -326,13 +275,13 @@ def build_stock(symbol: str, t: yf.Ticker, info: dict) -> dict:
  
     rec['metadata'] = {
         'expense_ratio': None,
-        'trailing_return_1y': to_num(trailing['1y'], 4, RETURN_LIMIT),
-        'trailing_return_5y': to_num(trailing['5y'], 4, RETURN_LIMIT),
-        'trailing_return_10y': to_num(trailing['10y'], 4, RETURN_LIMIT),
-        'price_target_median': to_num(info.get('targetMedianPrice'), 2, PRICE_LIMIT),
-        'price_target_mean': to_num(info.get('targetMeanPrice'), 2, PRICE_LIMIT),
-        'price_target_low': to_num(info.get('targetLowPrice'), 2, PRICE_LIMIT),
-        'price_target_hi': to_num(info.get('targetHighPrice'), 2, PRICE_LIMIT),
+        'trailing_return_1y': to_num(trailing['1y'], 4, config.RETURN_LIMIT),
+        'trailing_return_5y': to_num(trailing['5y'], 4, config.RETURN_LIMIT),
+        'trailing_return_10y': to_num(trailing['10y'], 4, config.RETURN_LIMIT),
+        'price_target_median': to_num(info.get('targetMedianPrice'), 2, config.PRICE_LIMIT),
+        'price_target_mean': to_num(info.get('targetMeanPrice'), 2, config.PRICE_LIMIT),
+        'price_target_low': to_num(info.get('targetLowPrice'), 2, config.PRICE_LIMIT),
+        'price_target_hi': to_num(info.get('targetHighPrice'), 2, config.PRICE_LIMIT),
         'avg_analyst_rating': parse_rating(info.get('averageAnalystRating')),
     }
     return rec
@@ -348,7 +297,7 @@ def build_fund(symbol: str, t: yf.Ticker, info: dict) -> dict:
     # sectors
     raw_weights = getattr(fd, 'sector_weightings', None) or {}
     for sector, pct in normalize_weightings(raw_weights).items():
-        if sector in SECTORS:
+        if sector in config.SECTORS:
             rec['sectors'][sector] = pct
         else:
             print(f'  unrecognized sector key "{sector}"')
@@ -366,9 +315,9 @@ def build_fund(symbol: str, t: yf.Ticker, info: dict) -> dict:
         if holdings_df is not None and not holdings_df.empty:
             ranked = holdings_df.sort_values('Holding Percent', ascending=False)
             for i, (sym, pct) in enumerate(ranked['Holding Percent'].items(), start=1):
-                if i > N_TOP_HOLDINGS:
+                if i > config.N_TOP_HOLDINGS:
                     break
-                pct = to_num(pct, 4, PCT_LIMIT)
+                pct = to_num(pct, 4, config.PCT_LIMIT)
                 if pct is not None:
                     rec['holdings'].append((str(sym)[:10], i, pct))
     except (KeyError, TypeError, AttributeError):
@@ -388,21 +337,21 @@ def build_fund(symbol: str, t: yf.Ticker, info: dict) -> dict:
         regional = regional_data.get('fundPortfolio', {}) or {}
  
         for style, pct in compute_style_pcts(allocation).items():
-            pct = to_num(pct, 4, PCT_LIMIT)
+            pct = to_num(pct, 4, config.PCT_LIMIT)
             if pct is not None:
                 rec['styles'][style] = pct
         for asset_class, pct in compute_asset_class_pcts(allocation, regional).items():
-            pct = to_num(pct, 4, PCT_LIMIT)
+            pct = to_num(pct, 4, config.PCT_LIMIT)
             if pct is not None:
                 rec['classes'][asset_class] = pct
     except Exception as e:
         print(f'  failed to fetch mstarpy allocation/regional data: {e}')
  
     rec['metadata'] = {
-        'expense_ratio': to_num(expense_ratio, 4, PCT_LIMIT),
-        'trailing_return_1y': to_num(trailing['1y'], 4, RETURN_LIMIT),
-        'trailing_return_5y': to_num(trailing['5y'], 4, RETURN_LIMIT),
-        'trailing_return_10y': to_num(trailing['10y'], 4, RETURN_LIMIT),
+        'expense_ratio': to_num(expense_ratio, 4, config.PCT_LIMIT),
+        'trailing_return_1y': to_num(trailing['1y'], 4, config.RETURN_LIMIT),
+        'trailing_return_5y': to_num(trailing['5y'], 4, config.RETURN_LIMIT),
+        'trailing_return_10y': to_num(trailing['10y'], 4, config.RETURN_LIMIT),
         'price_target_median': None,
         'price_target_mean': None,
         'price_target_low': None,
@@ -422,7 +371,7 @@ def fetch_asset(symbol: str) -> dict:
     quote_type = info.get('quoteType')
     if not quote_type:
         raise LookupError('ticker not found on Yahoo Finance')
-    kind = QUOTE_TYPE_TO_KIND.get(quote_type)
+    kind = config.QUOTE_TYPE_TO_KIND.get(quote_type)
     if kind is None:
         raise ValueError(f'unsupported security type "{quote_type}"')
  
@@ -486,11 +435,11 @@ def save_record(cur, rec: dict, price_chunk: int = 1000):
  
     # 3. allocations
     sync_children(cur, 'asset_sector_allocations', 'ticker', ticker, 'sector',
-                  [(k, to_num(v, 4, PCT_LIMIT)) for k, v in rec['sectors'].items() if v is not None], ['pct'])
+                  [(k, to_num(v, 4, config.PCT_LIMIT)) for k, v in rec['sectors'].items() if v is not None], ['pct'])
     sync_children(cur, 'asset_class_allocations', 'ticker', ticker, 'asset_class',
-                  [(k, to_num(v, 4, PCT_LIMIT)) for k, v in rec['classes'].items() if v is not None], ['pct'])
+                  [(k, to_num(v, 4, config.PCT_LIMIT)) for k, v in rec['classes'].items() if v is not None], ['pct'])
     sync_children(cur, 'asset_style_allocations', 'ticker', ticker, 'style',
-                  [(k, to_num(v, 4, PCT_LIMIT)) for k, v in rec['styles'].items() if v is not None], ['pct'])
+                  [(k, to_num(v, 4, config.PCT_LIMIT)) for k, v in rec['styles'].items() if v is not None], ['pct'])
  
     # 4. top holdings: records are (holding_ticker, rank, pct)
     sync_children(cur, 'asset_top_holdings', 'parent_ticker', ticker, 'holding_ticker',
