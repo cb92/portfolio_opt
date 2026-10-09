@@ -88,6 +88,9 @@ def fetch_frames() -> dict:
         frames = {
             'assets': query_df(cur, "SELECT ticker, security_type FROM assets ORDER BY ticker"),
             'expense': query_df(cur, "SELECT ticker, expense_ratio FROM asset_metadata"),
+            'metadata': query_df(cur, "SELECT ticker, security_type, expense_ratio, price_target_median, price_target_mean, \
+                                        price_target_low, price_target_hi, avg_analyst_rating, concat(substring(long_business_summary,1,100),'...') as long_business_summary\
+                                        FROM asset_metadata join assets using(ticker)"),
             'prices': query_df(cur, "SELECT ticker, price_date, close_price FROM asset_price_history"),
             'classes': query_df(cur, "SELECT ticker, asset_class, pct FROM asset_class_allocations"),
             'sectors': query_df(cur, "SELECT ticker, sector, pct FROM asset_sector_allocations"),
@@ -108,6 +111,7 @@ class PortfolioInputs:
     expense_ratios: pd.Series  # ticker -> expense ratio (NaN if none)
     security_types: pd.Series  # ticker -> 'STOCK' / 'FUND'
     prices: pd.DataFrame       # weekly closes over the COMMON window, columns = tickers
+    metadata: pd.DataFrame     # interesting asset level information to be printed/examined
     history_start: pd.Series   # ticker -> first available price date (before trimming)
     dropped: list              # assets excluded (no price history)
     types: pd.DataFrame        # asset classes  x assets
@@ -180,6 +184,17 @@ def build_stock_matrix(holdings, security_types, tickers) -> pd.DataFrame:
     m.columns.name = 'ticker'
     return m.sort_index()
 
+def sharpe_ratio(prices: pd.Series, risk_free_rate: float = config.RISK_FREE_RATE) -> float:
+    """Annualized Sharpe ratio of one asset from its weekly price history:
+    (mean weekly return * 52 - risk_free_rate) / (weekly std * sqrt(52)).
+    NaN if there are fewer than two returns or the volatility is zero."""
+    returns = prices.dropna().pct_change().dropna()
+    if len(returns) < 2:
+        return np.nan
+    periods = config.PERIODS_PER_YEAR
+    vol = returns.std() * np.sqrt(periods)
+    return (returns.mean() * periods - risk_free_rate) / vol if vol > 0 else np.nan
+
 
 def build_inputs(frames: dict, tickers=None, include_stocks=False) -> PortfolioInputs:
     """Align everything for a chosen universe.
@@ -219,6 +234,9 @@ def build_inputs(frames: dict, tickers=None, include_stocks=False) -> PortfolioI
         raise NoDataError('The selected assets have no overlapping price dates.')
     tickers = list(prices.columns)
     security_types = assets.set_index('ticker')['security_type'].reindex(tickers)
+    print(prices.head(10))
+
+    metadata = frames['metadata'].assign(sharpe_ratio=lambda df: df['ticker'].map(prices.apply(sharpe_ratio)))
 
     def with_float_pct(name):
         df = frames[name].copy()
@@ -228,6 +246,7 @@ def build_inputs(frames: dict, tickers=None, include_stocks=False) -> PortfolioI
     return PortfolioInputs(
         tickers=tickers,
         expense_ratios=frames['expense'].set_index('ticker')['expense_ratio'].astype(float).reindex(tickers),
+        metadata=metadata,
         security_types=security_types,
         prices=prices,
         history_start=history_start,

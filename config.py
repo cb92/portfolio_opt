@@ -40,7 +40,6 @@ SECTOR_KEY_MAP = {
 RISK_AVERSION = 3.0          # q
 MIN_WEIGHT = 0.0
 MAX_WEIGHT = 1.0
-MAX_ASSET_TYPE_PCT = 0.25
 ASSET_CLASS_BOUNDS = {          # (min, max) share of the whole portfolio
     'domesticlargecap': (0.45, 0.55),
     'domesticmidcap':   (0.10, 0.15),
