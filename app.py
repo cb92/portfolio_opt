@@ -24,32 +24,25 @@ import config
 import optimization as opt
 from pypfopt.discrete_allocation import DiscreteAllocation
 
-st.set_page_config(layout="wide")
+st.set_page_config(
+    page_title="Mean-Variance Portfolio Optimizer",
+    page_icon=":chart_with_upward_trend:",
+    layout="wide")
 
-st.markdown("""
-<style>
-.tiny-font {
-    font-size:12px !important;
-}
-</style>
-""", unsafe_allow_html=True)
-
-with st.bottom:
-    st.markdown(
-    """
-    <div class = 'tiny-font'>
-
-    _Important: This is a financial planning tool. Financial planning tools and educational content do not constitute personalized investment, tax, or legal advice. 
-    The presence of this application does not imply a certain level of skill or training. 
-    The projections, simulations, and outputs shown are best estimates based on the funds, optimization bounds and other inputs you provide. 
-    They are not guarantees of future performance. This model relies on historical data and assumed return distributions that may not reflect actual future returns. 
-    Past performance is not indicative of future results. Always consult a qualified professional before making material financial decisions._
-
-    [Github repo](https://github.com/cb92/portfolio_opt)     |     [My Linkedin](https://www.linkedin.com/in/cmbrasco/)
-    </div>
-    """, unsafe_allow_html=True
-    )
-
+st.title('Mean-Variance Portfolio Optimizer')
+st.caption('Welcome to Christina\'s Mean-Variance Portfolio Optimization tool! This tool is designed to '
+'help you choose a set of investments which suit your personal risk profile, and for which the Sharpe Ratio '
+'is maximized across the investment options you provide. The Sharpe ratio takes into account both portfolio volatility '
+'and expected returns, and expresses the excess expected portfolio return you can expect relative to portfolio volatility. '
+'This tool proceeds in three steps: '
+'\n1. **Setup**: Choose your candidate assets and set optimization parameters. The candidate assets can be chosen '
+'from the current set in the database which will appear in the multi-select below. Be sure to choose assets that '
+'represent a wide array of asset types and sectors, otherwise the optimizer will likely not converge. If '
+'you don\'t know where to start, you can just select all of the assets available.'
+'\n2. Run optimization by clicking the button below.'
+'\n3. Optionally, if you want to calculate the number of shares you should buy/own given the size of your current portfolio, '
+'you can get these numbers after the optimization completes. **Please note that I am a mathematician, not a tax professional! '
+'Consider the tax implications of any financial moves before you make them.**')
 
 # Helper function for dynamic color bar charts with percentage Y-axis
 def plot_percentage_bar_chart(data, x_col, y_col, x_label, y_label, label_angle=0):
@@ -294,30 +287,29 @@ def render_optimization(result, ef_points, data, risk_free_rate):
 # ---------------------------------------------------------------------------
 def render_allocation(allocation, leftover):
     st.metric('Leftover cash', f'${leftover:,.2f}')
-    st.dataframe(pd.Series(allocation, name='shares'))
+    st.dataframe(pd.Series(allocation, name='shares'), width="content")
     st.caption('Prices are the latest stored weekly close, not live quotes.')
 
 
 # ---------------------------------------------------------------------------
 # Page
 # ---------------------------------------------------------------------------
-st.header('Mean-Variance Portfolio Optimizer')
-st.caption('Welcome to Christina\'s Mean-Variance Portfolio Optimization tool! This tool is designed to '
-'help you choose a set of investments which suit your personal risk profile, and for which the Sharpe Ratio '
-'( excess expected portfolio return you can expect relative to the excess volatility it introduces above the '
-'risk-free asset) is maximized across the investment options you provide. This tool proceeds in three steps: '
-'\n1. **Setup**: Choose your candidate assets and set optimization parameters. The candidate assets can be chosen '
-'from the current set in the database which will appear in the multi-select below. Be sure to choose assets that '
-'represent a wide array of asset types and sectors, otherwise the optimizer will likely not converge. If '
-'you don\'t know where to start, you can just select all of the assets available.'
-'\n2. Run optimization by clicking the button below.'
-'\n3. Optionally, if you want to calculate the number of shares you should buy/own given the size of your current portfolio, '
-'you can get these numbers after the optimization completes.')
 
 frames = get_frames()
 picked = st.multiselect('Assets', frames['assets']['ticker'])
+
 if not picked:
     st.info('Pick one or more assets to begin.')
+    st.caption(
+        '_Important notes: \n'
+        'This is a financial planning tool. Financial planning tools and educational content do not constitute personalized investment, tax, or legal advice. '
+        'The presence of this application does not imply a certain level of skill or training. '
+        'The projections, simulations, and outputs shown are best estimates based on the funds, optimization bounds and other inputs you provide. '
+        'They are not guarantees of future performance. This model relies on historical data and assumed return distributions that may not reflect actual future returns. '
+        'Past performance is not indicative of future results. Always consult a qualified professional before making material financial decisions._'
+        ''
+        '\n\n[Github repo](https://github.com/cb92/portfolio_opt)     |     [My Linkedin](https://www.linkedin.com/in/cmbrasco/)'
+        )
     st.stop()
 
 selection = tuple(sorted(picked))   # identifies "which assets" a saved result belongs to
@@ -381,3 +373,14 @@ else:
         render_allocation(alloc['allocation'], alloc['leftover'])
     elif alloc and alloc['run_id'] == saved['run_id']:
         st.caption('Portfolio size changed. Click "Calculate share numbers" to update.')
+
+st.caption(
+'_Important notes: \n'
+'This is a financial planning tool. Financial planning tools and educational content do not constitute personalized investment, tax, or legal advice. '
+'The presence of this application does not imply a certain level of skill or training. '
+'The projections, simulations, and outputs shown are best estimates based on the funds, optimization bounds and other inputs you provide. '
+'They are not guarantees of future performance. This model relies on historical data and assumed return distributions that may not reflect actual future returns. '
+'Past performance is not indicative of future results. Always consult a qualified financial or tax professional before making material financial decisions._'
+''
+'\n\n[Github repo](https://github.com/cb92/portfolio_opt)     |     [My Linkedin](https://www.linkedin.com/in/cmbrasco/)'
+)
