@@ -35,6 +35,47 @@ SECTOR_KEY_MAP = {
     'healthcare': 'healthcare',
 }
 
+SECTOR_PRETTY_LABELS = {
+    'realestate': "Real Estate",
+    'consumer_cyclical': "Consumer Cyclical",
+    'basic_materials': "Basic Materials",
+    'consumer_defensive': "Consumer Defensive",
+    'technology': "Technology",
+    'communication_services': "Communication Services",
+    'financial_services': "Financial Services",
+    'utilities': "Utilities",
+    'industrials': "Industrials",
+    'energy': "Energy",
+    'healthcare': "Healthcare",
+}
+
+ASSET_CLASS_PRETTY_LABELS = {       
+    'domesticlargecap': "Domestic Large Cap",
+    'domesticmidcap':   "Domestic Mid Cap",
+    'domesticsmallcap': "Domestic Small Cap",
+    'emerging':         "Emerging",
+    'intllargecap':     "Intl Large Cap",
+    'intlmidcap':       "Intl Mid Cap",
+    'intlsmallcap':     "Intl Small Cap",
+}
+
+STYLE_PRETTY_LABELS = {
+    'value': 'Value',
+    'growth': 'Growth',
+    'blend': 'Blend',
+}
+
+MINIMAP = {
+    'QQQM': 'QQQ',
+    'SPLG': 'SPY',
+    'SPYM': 'SPY',
+    'GLDM': 'GLD',
+    'IAUM': 'IAU',
+    'BTC': 'GBTC',
+    'ETH': 'ETHE',
+
+}
+
 # --------- OPTIMIZATION PARAMETERS ---------
 
 RISK_AVERSION = 3.0          # q
@@ -58,7 +99,7 @@ RISK_FREE_RATE = 0.035   # annual rate used inside max_sharpe; placeholder, set 
 # --------- HISTORICAL PRICING PARAMETERS ---------
 
 N_TOP_HOLDINGS = 10
-HISTORY_PERIOD = '12y'
+HISTORY_PERIOD = '10y'
 HISTORY_INTERVAL = '1wk'   # weekly bars; 'Close' = last close of the week
 PERIODS_PER_YEAR = 52        # weekly data
 MIN_WEEKS_WARNING = 104      # warn if the common price window is shorter than ~2 years

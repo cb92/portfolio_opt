@@ -84,13 +84,27 @@ def fetch_frames() -> dict:
     """One read-only pass over the database; returns plain DataFrames."""
     cnx = get_connection()
     cur = cnx.cursor()
+
     try:
         frames = {
-            'assets': query_df(cur, "SELECT ticker, security_type FROM assets ORDER BY ticker"),
+            'assets': query_df(cur, "SELECT a.ticker, a.security_type, r.top_asset_class \
+                                    FROM (\
+                                        SELECT ticker, asset_class as top_asset_class \
+                                        FROM (SELECT ticker, asset_class, pct, \
+                                            rank() over(partition by ticker order by pct desc) as rnk \
+                                            FROM asset_class_allocations) b WHERE rnk = 1) r \
+                                    JOIN assets a USING(ticker);\
+                                    "),
             'expense': query_df(cur, "SELECT ticker, expense_ratio FROM asset_metadata"),
-            'metadata': query_df(cur, "SELECT ticker, security_type, expense_ratio, price_target_median, price_target_mean, \
-                                        price_target_low, price_target_hi, avg_analyst_rating, concat(substring(long_business_summary,1,100),'...') as long_business_summary\
-                                        FROM asset_metadata join assets using(ticker)"),
+            'metadata': query_df(cur, "SELECT ticker, security_type, longname, top_asset_class, expense_ratio, price_target_median, price_target_mean, \
+                                        price_target_low, price_target_hi, avg_analyst_rating \
+                                        FROM asset_metadata \
+                                        join assets using(ticker)\
+                                        join (\
+                                        SELECT ticker, asset_class as top_asset_class \
+                                        FROM (SELECT ticker, asset_class, pct, \
+                                            rank() over(partition by ticker order by pct desc) as rnk \
+                                            FROM asset_class_allocations) b WHERE rnk = 1) r using(ticker)"),
             'prices': query_df(cur, "SELECT ticker, price_date, close_price FROM asset_price_history"),
             'classes': query_df(cur, "SELECT ticker, asset_class, pct FROM asset_class_allocations"),
             'sectors': query_df(cur, "SELECT ticker, sector, pct FROM asset_sector_allocations"),
@@ -234,7 +248,6 @@ def build_inputs(frames: dict, tickers=None, include_stocks=False) -> PortfolioI
         raise NoDataError('The selected assets have no overlapping price dates.')
     tickers = list(prices.columns)
     security_types = assets.set_index('ticker')['security_type'].reindex(tickers)
-    print(prices.head(10))
 
     metadata = frames['metadata'].assign(sharpe_ratio=lambda df: df['ticker'].map(prices.apply(sharpe_ratio)))
 
@@ -363,6 +376,7 @@ def build_problem(data: PortfolioInputs, mu, cov, c: Constraints):
     (e.g. one for max_sharpe, one for the frontier)."""
     n = len(data.tickers)
     cash = c.pct_risk_free > 0
+    k = 1 - c.pct_risk_free   # user bounds are shares of INVESTED assets; the solver uses total-portfolio weights
     if cash:
         # Cash = an asset at the risk-free rate with ~zero variance and a FIXED weight.
         mu = pd.concat([mu, pd.Series({CASH: c.risk_free_rate})])
@@ -370,9 +384,9 @@ def build_problem(data: PortfolioInputs, mu, cov, c: Constraints):
         cov.loc[CASH, :] = 0.0
         cov.loc[:, CASH] = 0.0
         cov.loc[CASH, CASH] = 1e-8
-        weight_bounds = [(c.min_weight, c.max_weight)] * n + [(c.pct_risk_free, c.pct_risk_free)]
+        weight_bounds = [(c.min_weight * k, c.max_weight * k)] * n + [(c.pct_risk_free, c.pct_risk_free)]
     else:
-        weight_bounds = (c.min_weight, c.max_weight)
+        weight_bounds = (c.min_weight * k, c.max_weight * k)
 
     def with_cash(m):          # cash has no sector / class / style / stock exposure
         return m.assign(**{CASH: 0.0}) if cash else m
@@ -381,11 +395,11 @@ def build_problem(data: PortfolioInputs, mu, cov, c: Constraints):
 
     stock_matrix = with_cash(data.stocks).values
     if stock_matrix.shape[0]:
-        ef.add_constraint(lambda w: stock_matrix @ w <= c.max_stock_pct)
+        ef.add_constraint(lambda w: stock_matrix @ w <= c.max_stock_pct * k)
 
     bounds = category_bounds(data, c)
-    add_exposure_bounds(ef, with_cash(data.sectors), *bounds['sectors'])
-    add_exposure_bounds(ef, with_cash(data.types), *bounds['types'])
+    add_exposure_bounds(ef, with_cash(data.sectors), bounds['sectors'][0] * k, bounds['sectors'][1] * k)
+    add_exposure_bounds(ef, with_cash(data.types), bounds['types'][0] * k, bounds['types'][1] * k)
     return ef
 
 @dataclass
@@ -401,7 +415,7 @@ class OptimizationResult:
     top_holdings: pd.Series     # look-through underlying exposure, sorted desc (full list)
     expense_ratio: float        # weighted
     warnings: list              # data-quality + infeasibility warnings
-
+    backtest_results: pd.DataFrame         
 
 def optimize(data: PortfolioInputs, constraints: Constraints = None, cov_method='ledoit_wolf') -> OptimizationResult:
     """Max-Sharpe portfolio under the constraints. Raises OptimizationFailed if no
@@ -425,6 +439,7 @@ def optimize(data: PortfolioInputs, constraints: Constraints = None, cov_method=
 
     names = list(data.tickers) + ([CASH] if c.pct_risk_free > 0 else [])
     w = pd.Series(raw).reindex(names).fillna(0.0).clip(lower=0.0)
+    w_inv = w.drop(CASH, errors='ignore') / (1 - c.pct_risk_free)   # shares of invested assets, sums to 1
 
     return OptimizationResult(
         weights=w,
@@ -432,12 +447,13 @@ def optimize(data: PortfolioInputs, constraints: Constraints = None, cov_method=
         volatility=vol,
         sharpe=sharpe,
         positions=positions_table(data, w),
-        sectors=breakdown(data.sectors, w, *bounds['sectors']),
-        asset_classes=breakdown(data.types, w, *bounds['types']),
-        styles=breakdown(data.styles, w),
-        top_holdings=lookthrough_exposure(data, w),
+        sectors=breakdown(data.sectors, w_inv, *bounds['sectors']),
+        asset_classes=breakdown(data.types, w_inv, *bounds['types']),
+        styles=breakdown(data.styles, w_inv),
+        top_holdings=lookthrough_exposure(data, w_inv),
         expense_ratio=weighted_expense_ratio(data, w),
         warnings=warnings,
+        backtest_results = backtest_portfolio(data, w),
     )
 
 
@@ -466,6 +482,69 @@ def efficient_frontier_points(data: PortfolioInputs, constraints: Constraints = 
         r, v, _ = sweep.portfolio_performance()
         rows.append((v, r))
     return pd.DataFrame(rows, columns=['volatility', 'expected_return'])
+
+
+def backtest_portfolio(data: PortfolioInputs, weights: pd.Series, initial_principal: float = 100000.0, 
+                       rebalance_months: int = 12, tax_rate: float = 0.25) -> pd.DataFrame:
+    """Backtests portfolio weights over available historical prices with periodic tax-aware rebalancing."""
+    w = weights.drop('CASH', errors='ignore')
+    w = w[w > 0] / w[w > 0].sum()
+    
+    # Resample price history to monthly ends over the historical window
+    prices_m = data.prices[w.index].resample('ME').last().dropna()
+    
+    portfolio_values, taxes_paid, cost_basis_values = [], [], []
+    total_val = initial_principal
+    cost_basis = total_val * w
+    units = (total_val * w) / prices_m.iloc[0] # allow partial units for simplicity
+
+    for i, (date, prices) in enumerate(prices_m.iterrows()):
+        curr_vals = units * prices
+        total_val = curr_vals.sum()
+        tax = 0.0
+
+        # Rebalance according to schedule
+        if i > 0 and i % rebalance_months == 0:
+            sold_mask = curr_vals > (total_val * w)
+            #print(sold_mask)
+            
+            # Tax capital gains on sold portions
+            if sold_mask.any():
+                gain_frac = np.maximum(0.0, (curr_vals[sold_mask] - cost_basis[sold_mask]) / curr_vals[sold_mask])
+                #print(gain_frac)
+                pre_tax_targets = total_val * w
+                sold_amt = curr_vals[sold_mask] - pre_tax_targets[sold_mask]
+                realized_gains = sold_amt * gain_frac
+                #print(realized_gains)
+                tax = float(realized_gains.sum() * tax_rate)
+                #print(tax)
+
+            # 2. Subtract tax from total portfolio value to get post-tax pool
+            post_tax_total = total_val - tax
+            post_tax_targets = post_tax_total * w
+
+            # 3. Update cost basis correctly per asset
+            new_cost_basis = cost_basis.copy()
+            for ticker in w.index:
+                if curr_vals[ticker] > post_tax_targets[ticker]:
+                    # Sold/Trimmed: reduce cost basis proportionally to remaining value
+                    frac_retained = post_tax_targets[ticker] / curr_vals[ticker]
+                    new_cost_basis[ticker] *= frac_retained
+                else:
+                    # Bought/Added: add exact dollar amount of new purchases
+                    added_dollars = post_tax_targets[ticker] - curr_vals[ticker]
+                    new_cost_basis[ticker] += added_dollars
+
+            # 4. Update state variables
+            cost_basis = new_cost_basis
+            total_val = post_tax_total
+            units = post_tax_targets / prices
+
+        portfolio_values.append(total_val)
+        taxes_paid.append(tax)
+        cost_basis_values.append(cost_basis.sum())
+
+    return pd.DataFrame({'portfolio_value': portfolio_values, 'taxes_paid': taxes_paid, 'cost_basis': cost_basis_values}, index=prices_m.index)
 
 # ---------------------------------------------------------------------------
 # Command-line report (the only place that prints)

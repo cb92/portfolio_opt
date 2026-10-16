@@ -4,9 +4,9 @@
 This tool is designed to help you choose a set of investments which suit your personal risk profile, and for which the Sharpe Ratio (excess expected portfolio return you can expect relative to the excess volatility it introduces above the '
 'risk-free asset) is maximized across the investment options you provide. This tool proceeds in three steps:
 
-1. **Setup**: Choose your candidate assets and set optimization parameters. The candidate assets can be chosen from the current set in the database which will appear in the multi-select below. Be sure to choose assets that represent a wide array of asset types and sectors, otherwise the optimizer will likely not converge. If you don't know where to start, you can just select all of the assets available.
+1. **Setup**: Choose your candidate assets and set optimization parameters. The candidate assets can be chosen from the current set in the database which will appear in the multi-select below. Be sure to choose assets that represent a wide array of asset types and sectors, otherwise the optimizer will likely not converge. If you don't know where to start, you can just select all of the assets available. If there's a fund you wish was included here, you can add it to the request queue.
 
-2. Run optimization by clicking the button below.
+2. Run optimization by clicking the button.
 
 3. Optionally, if you want to calculate the number of shares you should buy/own given the size of your current portfolio, you can get these numbers after the optimization completes.
 
@@ -60,7 +60,10 @@ erDiagram
     }
     assets {
         varchar ticker PK
+        varchar parent_ticker
         enum security_type "STOCK, FUND"
+        varchar website
+        varchar longname
         varchar country
         text long_business_summary
         timestamp created_at
@@ -124,7 +127,7 @@ Generally speaking, we want all of the stocks and funds to be roughly the same l
 New assets enter through `requested_assets` (`pending` -> `processing` -> `done` or `failed`). `data_collection.py` works through whatever is pending, works out whether each ticker is a stock or a fund, and writes everything to the asset tables. Failed requests keep their error message so they can be retried.
 
 ### Run Log
-A starting set of 35 assets (a mix of stocks, ETFs and mutual funds) has been successfully pulled as of 10/1/26 around 11am.
+A starting set of 75 assets (a mix of stocks, ETFs and mutual funds) has been successfully pulled as of 10/15/26 around 5pm.
 
 ## Optimization Strategy
 I'm using Mean-Variance Optimization to develop an efficient portfolio from the desired set of assets, allowing me to take into account expected return, correlation between assets, and accounting for personal risk tolerance (determined by. the optimization parameters).
@@ -141,7 +144,7 @@ Max Sharpe means I don't have to know my own numerical risk tolerance, which is 
 
 ### Inputs 
 Note that all values are calculated over the entire period over which all assets have available history, up to twelve years.
-- **Prices:** weekly closes, adjusted for splits and dividends so returns are total returns. Fund prices already reflect their expense ratios.
+- **Prices:** weekly closes, adjusted for splits and dividends so returns are total returns. Fund prices already reflect their expense ratios. 
 - **Expected returns:** the arithmetic mean of weekly returns, times 52. Mean-variance is a single-period model, so the expected return per period is the right input. A compounded (geometric) average would understate it.
 - **Covariance:** using weekly returns, annualized, with Ledoit-Wolf shrinkage. With a lot of assets and limited history the plain sample covariance is noisy and gives unstable weights, and shrinkage pulls it towards something steadier. Weekly rather than daily returns are less noisy and reduce the mismatch in closing times between mutual funds, ETFs and foreign markets.
 - **Risk free rate:** an assumption I set (sidebar in the app). It's the baseline for the Sharpe ratio and what any cash earns.
@@ -153,7 +156,9 @@ Every asset has to be measured over the same dates or the comparison isn't fair.
 - The window is recalculated whenever the selection changes, and the app shows which dates it covers in the price history graph below asset selection.
 - A warning appears if the shared window is short (the threshold for this warning is set in `config.py`), since the estimates get noisy.
 - Assets with no price history at all are dropped.
-- Up to 12 years of weekly history is stored per asset, so that's the most any window can cover.
+- Up to 10 years of weekly history is stored per asset, so that's the most any window can cover.
+
+Special note on mini-funds: some funds that are considered "mini-funds" track a fund with more longevity (ie. QQQM relative to QQQ). For some of the most popular mini funds, they were only introduced recently and so including them in calculating this shared history truncates the window for all assets. To get around this, the longer history of the parent fund (which is equivalent) is pulled to calculate relative returns. 
 
 ### Constraints
 All of these are linear constraints on the weights, and the defaults live in `config.py` (they can be changed in the app's sidebar):
@@ -177,6 +182,8 @@ Value / growth / blend style is reported for the final portfolio but isn't const
 
 ### Outputs
 The app shows the Sharpe ratio, expected return and weighted expense ratio, the weights, sector / asset class / style / top holding breakdowns and the efficient frontier. It can also turn the weights into whole share counts for a given portfolio size (greedy allocation from `pypfopt`, using the latest stored weekly close). Note that the Sharpe ratio is in-sample: it's calculated from the same history used to pick the weights, so it describes the past and will flatter what to expect going forward. 
+
+A (relatively crude) backtesting is also performed using the chosen portfolio. This assumes we had adopted the recommended set of investments at the beginning of the shared history window, rebalancing at some set interval (yearly) and paying taxes as necessary around that time. The results of this - performance, cost basis and taxes paid - are also presented as outputs.
 
 ### What isn't modeled
 I'm ignoring tax constraints (account type, capital gains, dividend treatment, loss harvesting) and transaction fees (commissions, spreads, the cost of rebalancing). Expense ratios are the only costs that show up, and those are already in fund returns. Once again, this isn't financial advice.
@@ -221,6 +228,5 @@ In your cloned repo directory:
    `python optimization.py` prints the same optimization as a text report without the app.
 
 ## Future Work
-- **Request queue in the app:** let users add new tickers to `requested_assets` and see their status. Requests would sit as `pending` until I run the collection script, since Morningstar has to be pulled manually. Duplicates are blocked by the table's primary key.
 - **Aligning tickers to a parent ticker:** different tickers for the same underlying thing (share classes like GOOG and GOOGL, or a fund and its twin) are treated as separate assets right now. That means the single stock limit undercounts exposure to a company, and near identical assets can both be picked. Mapping them to one parent ticker would fix both. This is not a trivial problem nor is it exceptionally common.
 - **Deploying:** moving the database to Railway and the app to Streamlit Community Cloud. The app would connect with a limited database user (read access plus insert on the request table only) and use `st.secrets` instead of `.env`. The collection script would stay on my machine, pointed at the Railway database.

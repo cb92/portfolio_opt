@@ -13,7 +13,7 @@ import mysql.connector
 from dotenv import load_dotenv
 
 # letters/digits/dot/hyphen, 1-10 chars (matches VARCHAR(10) in setup.sql)
-TICKER_RE = re.compile(r'^[A-Z0-9][A-Z0-9.\-]{0,9}$')
+TICKER_RE = re.compile(r'^[A-Z0-9][A-Z0-9\-]{0,9}$')
 
 
 # Pulls out the first value associated with any one of the names provided
@@ -25,7 +25,7 @@ def _env(*names, default=None):
     return default
 
 
-def get_db_config() -> dict:
+def get_db_config(prefix='') -> dict:
     """Build mysql-connector kwargs from the environment.
 
     Priority:
@@ -36,7 +36,7 @@ def get_db_config() -> dict:
     """
     load_dotenv()  # no-op if there is no .env file
 
-    url = _env('DATABASE_URL', 'MYSQL_URL')
+    url = _env(f'{prefix}DATABASE_URL', 'MYSQL_URL')
     if url:
         p = urlparse(url)
         cfg = {
@@ -48,18 +48,18 @@ def get_db_config() -> dict:
         }
     else:
         cfg = {
-            'host': _env('DB_HOST', 'MYSQLHOST', default='localhost'),
-            'port': int(_env('DB_PORT', 'MYSQLPORT', default='3306')),
-            'user': _env('DB_USER', 'MYSQLUSER', default='root'),
-            'password': _env('DB_PASSWORD', 'MYSQLPASSWORD', default=''),
-            'database': _env('DB_NAME', 'MYSQLDATABASE', default='portfolio_db'),
+            'host': _env(f'{prefix}DB_HOST', 'MYSQLHOST', default='localhost'),
+            'port': int(_env(f'{prefix}DB_PORT', 'MYSQLPORT', default='3306')),
+            'user': _env(f'{prefix}DB_USER', 'MYSQLUSER'),
+            'password': _env(f'{prefix}DB_PASSWORD', 'MYSQLPASSWORD', default=''),
+            'database': _env(f'{prefix}DB_NAME', 'MYSQLDATABASE', default='portfolio_db'),
         }
     cfg['connection_timeout'] = 30
     return cfg
 
 
-def get_connection():
-    cnx = mysql.connector.connect(**get_db_config())
+def get_connection(prefix=''):
+    cnx = mysql.connector.connect(**get_db_config(prefix))
     cur = cnx.cursor()
     cur.execute("SET time_zone = '+00:00'")  # store/compare timestamps in UTC everywhere
     cur.close()
@@ -67,8 +67,8 @@ def get_connection():
 
 
 def normalize_ticker(raw):
-    """Uppercase/strip a ticker; return None if it isn't a plausible symbol."""
-    t = str(raw or '').strip().upper()
+    """Uppercase/strip a ticker, convert '.' to '-' (Yahoo style); return None if it isn't a plausible symbol."""
+    t = str(raw or '').strip().upper().replace('.', '-')
     return t if TICKER_RE.match(t) else None
 
 

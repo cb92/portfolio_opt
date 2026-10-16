@@ -29,7 +29,10 @@ CREATE TABLE IF NOT EXISTS requested_assets (
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS assets (
     ticker                VARCHAR(10) PRIMARY KEY,
+    parent_ticker         VARCHAR(10),
     security_type         ENUM('STOCK', 'FUND') NOT NULL,
+    website               VARCHAR(50),
+    longname              VARCHAR(50),
     country               VARCHAR(50),
     long_business_summary TEXT,
     created_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
