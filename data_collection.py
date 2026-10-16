@@ -36,6 +36,7 @@ import yfinance as yf
 from db import get_connection
 import config
 
+
 _MSTAR_SESSION = None
 
 """
@@ -80,10 +81,14 @@ def get_morningstar_session():
 # ---------------------------------------------------------------------------
 # Price history + trailing returns
 # ---------------------------------------------------------------------------
-def fetch_weekly_history(t: yf.Ticker):
-    """Weekly closes for the last HISTORY_PERIOD as a DataFrame[Date, Close], or None."""
+
+def fetch_weekly_history(t: yf.Ticker, parent_ticker = None):
+    """Weekly closes for the last HISTORY_PERIOD as a DataFrame[Date, Close], or None."""   
     try:
-        hist = t.history(period=config.HISTORY_PERIOD, interval=config.HISTORY_INTERVAL).reset_index()
+        if parent_ticker:
+            hist = yf.Ticker(parent_ticker).history(period=config.HISTORY_PERIOD, interval=config.HISTORY_INTERVAL).reset_index()
+        else:
+            hist = t.history(period=config.HISTORY_PERIOD, interval=config.HISTORY_INTERVAL).reset_index()
     except Exception as e:
         print(f'  history fetch failed: {e}')
         return None
@@ -118,7 +123,7 @@ def compute_trailing_returns(hist) -> dict:
         target = latest - pd.DateOffset(years=years)
 
         # weekly bars: allow up to one week of slack at the start of the window
-        if earliest > target + pd.Timedelta(days=7):
+        if earliest > target + pd.Timedelta(days=28):
             continue  # not enough history for this window — leave as None
 
         idx = (hist['Date'] - target).abs().idxmin()
@@ -259,6 +264,9 @@ def build_stock(symbol: str, t: yf.Ticker, info: dict) -> dict:
     rec = new_record(symbol, 'STOCK')
     rec['country'] = info.get('country')
     rec['long_business_summary'] = info.get('longBusinessSummary')
+    rec['longName'] = info.get('longName')[:50]
+    rec['website'] = info.get('website')
+    rec['parentTicker'] = None
  
     sector = config.SECTOR_KEY_MAP.get(info.get('sectorKey'))
     if sector:
@@ -291,6 +299,13 @@ def build_fund(symbol: str, t: yf.Ticker, info: dict) -> dict:
     rec = new_record(symbol, 'FUND')
     rec['country'] = info.get('country')
     rec['long_business_summary'] = info.get('longBusinessSummary')
+    rec['longName'] = info.get('longName')[:50]
+    rec['website'] = info.get('website')
+    if symbol in list(config.MINIMAP):
+        rec['parentTicker'] = config.MINIMAP.get(symbol)
+    else: 
+        rec['parentTicker'] = None
+
  
     fd = t.funds_data
  
@@ -324,7 +339,7 @@ def build_fund(symbol: str, t: yf.Ticker, info: dict) -> dict:
         pass
  
     # prices + trailing returns
-    hist = fetch_weekly_history(t)
+    hist = fetch_weekly_history(t, rec['parentTicker'])
     trailing = compute_trailing_returns(hist)
     rec['prices'] = history_rows(hist)
  
@@ -410,14 +425,17 @@ def save_record(cur, rec: dict, price_chunk: int = 1000):
  
     # 1. parent row (must exist before any child row because of the foreign keys)
     cur.execute(
-        """INSERT INTO assets (ticker, security_type, country, long_business_summary)
-           VALUES (%s, %s, %s, %s)
+        """INSERT INTO assets (ticker, parent_ticker, security_type, website, longname, country, long_business_summary)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)
            ON DUPLICATE KEY UPDATE
+               parent_ticker = COALESCE(VALUES(parent_ticker), parent_ticker),
                security_type = VALUES(security_type),
+               website = COALESCE(VALUES(website), website),
+               longname = COALESCE(VALUES(longname), longname),
                country = COALESCE(VALUES(country), country),
                long_business_summary = COALESCE(VALUES(long_business_summary), long_business_summary),
                updated_at = CURRENT_TIMESTAMP""",
-        (ticker, rec['security_type'], rec['country'], rec['long_business_summary']),
+        (ticker, rec['parentTicker'], rec['security_type'], rec['website'], rec['longName'], rec['country'], rec['long_business_summary']),
     )
  
     # 2. metadata (a NULL from a flaky fetch keeps the previous value)
@@ -523,7 +541,7 @@ def main():
                         help='re-queue done assets whose data is older than DAYS days')
     args = parser.parse_args()
  
-    cnx = get_connection()
+    cnx = get_connection('ADMIN_')
     cur = cnx.cursor()
  
     if args.reset_stuck:
