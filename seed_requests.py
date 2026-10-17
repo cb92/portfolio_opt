@@ -29,7 +29,7 @@ FUNDS = [
 
 
 def main():
-    cnx = get_connection('ADMIN_')
+    cnx = get_connection('RAILWAY_')
     cur = cnx.cursor()
     try:
         queued, existing, invalid = queue_tickers(cur, STOCKS + FUNDS)

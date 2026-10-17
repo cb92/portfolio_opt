@@ -1,4 +1,5 @@
-# Mean-Variane Portfolio Optimizer
+# Mean-Variance Portfolio Optimizer
+This tool is deployed at https://portfolioopt-cb.streamlit.app/ and uses Railway to host the MySQL database.
 
 ## Overview
 This tool is designed to help you choose a set of investments which suit your personal risk profile, and for which the Sharpe Ratio (excess expected portfolio return you can expect relative to the excess volatility it introduces above the '
@@ -227,6 +228,5 @@ In your cloned repo directory:
    ```
    `python optimization.py` prints the same optimization as a text report without the app.
 
-## Future Work
+## Potential Future Work
 - **Aligning tickers to a parent ticker:** different tickers for the same underlying thing (share classes like GOOG and GOOGL, or a fund and its twin) are treated as separate assets right now. That means the single stock limit undercounts exposure to a company, and near identical assets can both be picked. Mapping them to one parent ticker would fix both. This is not a trivial problem nor is it exceptionally common.
-- **Deploying:** moving the database to Railway and the app to Streamlit Community Cloud. The app would connect with a limited database user (read access plus insert on the request table only) and use `st.secrets` instead of `.env`. The collection script would stay on my machine, pointed at the Railway database.

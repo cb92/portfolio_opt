@@ -52,7 +52,9 @@ st.caption('Welcome to Christina\'s Mean-Variance Portfolio Optimization tool! T
 'Consider the tax implications of any financial moves before you make them.**')
 
 # Helper function for dynamic color bar charts with percentage Y-axis
-def plot_percentage_bar_chart(data, x_col, y_col, x_label, y_label, label_angle=0, label_map=None):
+def plot_percentage_bar_chart(
+        data, x_col, y_col, x_label, y_label, 
+        label_angle=0, label_map=None, tooltip_col=None, tooltip_label=None):
     # Convert proportions to percentages for display
     df = data.copy().reset_index()
     if df.columns[0] == "index" or df.columns[0] == 0:
@@ -61,6 +63,15 @@ def plot_percentage_bar_chart(data, x_col, y_col, x_label, y_label, label_angle=
     # Map the x-axis column values if a dictionary map is provided
     if label_map:
         df[x_col] = df[x_col].map(lambda val: label_map.get(val, val))
+
+    tooltip = [
+        alt.Tooltip(f"{x_col}:N", title=x_label),
+        alt.Tooltip(f"{y_col}:Q", title=y_label, format=".1%"),
+    ]
+    if tooltip_col:
+        tooltip.append(
+            alt.Tooltip(f"{tooltip_col}:N", title=tooltip_label or tooltip_col)
+        )
 
     chart = (
         alt.Chart(df)
@@ -80,6 +91,7 @@ def plot_percentage_bar_chart(data, x_col, y_col, x_label, y_label, label_angle=
                 axis=alt.Axis(format="%"),  # Format Y-axis as percentage
             ),
             color=alt.Color(f"{x_col}:N", legend=None),  # Distinct bar colors
+            tooltip=tooltip
         )
     )
     st.altair_chart(chart, width='stretch')
@@ -114,9 +126,10 @@ with st.sidebar:
     parameters" at the bottom to apply them. All limits below are shares **of your invested assets** (everything except cash), \
     so changing the cash share doesn\'t change them.')
     with st.form('parameters'):
-        min_w, max_w = pct_slider(
-            'Weight per asset (min - max)', (defaults.min_weight, defaults.max_weight), key='p_weights',
-            help='The smallest and largest share of your invested assets any single fund can hold. '
+        min_w = 0
+        max_w = pct_slider(
+            'Max weight per asset', defaults.max_weight, key='p_weights',
+            help='The largest share of your invested assets any single fund can hold. '
                  'For example, a max of 25% stops one fund from dominating. Most funds will be capped below this level by '
                  'other parameters, regardless, and this constraint is rarely binding unless it is set very low.')
         max_stock = pct_slider(
@@ -218,12 +231,14 @@ def render_optimization(result, ef_points, data, risk_free_rate):
 
     # 2. Asset Weights in Optimized Portfolio
     st.subheader("Asset Weights in Optimized Portfolio")
+    names = pd.Series(data.metadata['longname'].values, index = data.metadata['ticker'], name = 'Name')
     plot_percentage_bar_chart(
-        result.positions["weight"],
+        pd.concat([result.positions["weight"], names], axis=1, join='inner'),
         x_col="Asset",
         y_col="weight",
         x_label="Asset",
-        y_label="Portfolio Weight"
+        y_label="Portfolio Weight", 
+        tooltip_col='Name'
     )
     # 3. Sector Exposures in Optimized Portfolio
     st.subheader("Sector Exposures in Optimized Portfolio")
@@ -329,7 +344,7 @@ def render_optimization(result, ef_points, data, risk_free_rate):
         strokeWidth=4
     )
     
-    st.altair_chart(asset_lines + portfolio_line, use_container_width=True)
+    st.altair_chart(asset_lines + portfolio_line, width='stretch')
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +366,7 @@ frames = get_frames()
 col1, col2 = st.columns([0.7,0.3])
 with col1:
     st.subheader('Assets')
+    st.caption('The pre-selected assets are a good start, but select more if you want!')
     # 1. Map your tickers to their respective top asset classes for quick lookup
     asset_map = dict(zip(frames['assets']['ticker'], frames['assets']['top_asset_class']))
 
@@ -358,8 +374,12 @@ with col1:
     picked = st.multiselect(
         label='Assets', 
         options=frames['assets']['ticker'], 
-        format_func=lambda x: f"{x} ({config.ASSET_CLASS_PRETTY_LABELS.get(asset_map.get(x), asset_map.get(x, 'Unknown'))})",        label_visibility="collapsed"
+        format_func=lambda x: f"{x} ({config.ASSET_CLASS_PRETTY_LABELS.get(asset_map.get(x), asset_map.get(x, 'Unknown'))})",        
+        label_visibility="collapsed", 
+        default = ['DIA','FEZ','FNDF','IEFA','IEUR','IPAC','ONEQ','QQQM','RWK','SPEM',
+            'VDE','VEA','VEIRX','VHT','VOO','VTI','VWO', 'XLE','XLV',  'XMHQ', 'XMMO', 'XSVM']
     )
+
 with col2: 
     st.subheader('New Asset Requests')
     with st.form('tickers'):
@@ -436,7 +456,7 @@ render_asset_info(data, disp, picked)
 
 # --- Part 2: optimization (on demand) ---
 st.header('Optimization')
-if st.button('Run optimization'):
+if st.button('Run optimization', type='primary'):
     try:
         st.session_state['opt'] = {
             'selection': selection,

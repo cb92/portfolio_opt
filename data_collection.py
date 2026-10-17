@@ -541,7 +541,7 @@ def main():
                         help='re-queue done assets whose data is older than DAYS days')
     args = parser.parse_args()
  
-    cnx = get_connection('ADMIN_')
+    cnx = get_connection('RAILWAY_')
     cur = cnx.cursor()
  
     if args.reset_stuck:
