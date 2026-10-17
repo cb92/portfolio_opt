@@ -189,7 +189,8 @@ def get_frames():
 def render_asset_info(data, disp, picked):
     st.subheader('Relative Adjusted Price History over shared period')
     '**Relative** refers to the fact that we are setting the value at the start of the period to 1.0 for every asset. **Adjusted** means that we are tracking dividend-adjusted rather than raw returns. The shared period is the time frame over which all chosen assets have price history.'
-    st.line_chart(data.prices.div(data.prices.iloc[0], axis=1), x_label='Date', y_label='Relative Adjusted Price')
+    st.line_chart(data.prices.div(data.prices.iloc[0], axis=1).round(2).resample('ME').last().dropna(), x_label='Date', y_label='Relative Adjusted Price')
+
     disp['Top Asset Class'] = disp['Top Asset Class'].map(config.ASSET_CLASS_PRETTY_LABELS)
     st.dataframe(disp.loc[picked])
 
@@ -213,6 +214,7 @@ def render_optimization(result, ef_points, data, risk_free_rate):
     sharpe_series = pd.concat([asset_sharpes, pd.Series({"Optimized Portfolio": result.sharpe})])
     df_sharpe = sharpe_series.reset_index()
     df_sharpe.columns = ["Asset", "Sharpe Ratio"]
+    df_sharpe['Sharpe Ratio'] = df_sharpe['Sharpe Ratio'].round(3)
 
     sharpe_chart = (
         alt.Chart(df_sharpe)
